@@ -1,0 +1,27 @@
+---
+title: "Data Cleaning"
+author: "Yuchen Huang"
+format: pdf
+editor: visual
+---
+
+## Loading Packages
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+#| warning: false
+#| message: false
+#| echo: false
+
+library(knitr)
+library(tidyverse)
+```
+
+## Loading Data
+
+```{r}
+a <- read.csv("ACSST5Y2021.S1701-Data.csv")
+```

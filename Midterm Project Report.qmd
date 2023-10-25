@@ -1,0 +1,11 @@
+---
+title: "Midterm Project Report"
+author: "Yuchen Huang"
+format: pdf
+editor: visual
+---
+
+```{r}
+#| echo: false
+2 * 2
+```
