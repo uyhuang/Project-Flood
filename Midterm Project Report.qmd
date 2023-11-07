@@ -1,7 +1,7 @@
 ---
 title: "Midterm Project Report"
 author: "Yuchen Huang"
-format: pdf
+format: html
 editor: visual
 ---
 
@@ -9,7 +9,7 @@ editor: visual
 
 #### Data sources
 
-The dataset for this report has been collated from authoritative sources, specifically the National Oceanic and Atmospheric Administration (NOAA), the Federal Emergency Management Agency (FEMA), and the United States Census Bureau. This report concentrates on the incidence and impact of floods and storms during the years 2020 to 2021. It aims to shed light on the repercussions of these disasters on affected populations.
+The dataset for this report has been collated from authoritative sources, specifically the National Oceanic and Atmospheric Administration (NOAA), the Federal Emergency Management Agency (FEMA), and the United States Census Bureau. FEMA provides two files one is disasters information and financial assistance value. This report concentrates on the incidence and impact of floods and storms during the years 2020 to 2021. It aims to shed light on the repercussions of these disasters on affected populations.
 
 #### Assumptions and motivations
 
@@ -30,10 +30,592 @@ library(tidyverse)
 library(scales)
 ```
 
-## Question
+#### FEMA Disaster
 
--   Which states in the U.S. received the most rainfall in 2020-2021? How was the distribution of rainfall in each month?（begin month/year, State, top10?, 2020 on left 2021 on right)
+In concentrating on flood data relevant to the years 2020 and 2021, it is necessary to isolate and extract records of disasters that commenced within this specific time frame and disaster type. In the following data cleaning I will call the FEMA Disaster as `flood`.
 
--   Dangerous by fatality? facet by flood/not flood, y can be duration of the storm/flood.
+```{r}
+#| echo: false
 
--   
+flood <- read.csv("DisasterDeclarationsSummaries.csv", header = T)
+## filter out flood disaster only and during 2020-2021
+flood <- flood |>
+    filter((incidentType == "Flood")&
+               (str_starts(incidentBeginDate, "2020-")|str_starts(incidentBeginDate, "2021-")))
+```
+
+Initially, I will streamline the flood data set by selecting only the essential columns, as it includes redundant information such as the incident type "flood" and the declaration type "DR" which are already established.
+
+```{r}
+#| echo: false
+
+##remove unneeded columns
+## I remove some declaration strings, and some information that we already know, like incident type is flood, declaration type is DR
+## tribal request is all 0, means was not submitted directly to the President, independently of a state, by a Tribal Nation.
+flood <- flood |> 
+    select(disasterNumber, state, designatedArea, ihProgramDeclared, iaProgramDeclared, paProgramDeclared, hmProgramDeclared, incidentBeginDate, incidentEndDate)
+
+print(paste("The column names of the flood dataset are:", toString(colnames(flood))))
+```
+
+The `designatedArea` field encompasses both county names and Indian Reservation areas; therefore, I have partitioned this field into two distinct columns: `County` for county-specific data and `Indian Reservation` for data pertaining to Indian Reservations.
+
+```{r}
+#| echo: false
+
+##separate 
+flood <- flood |>
+    mutate(IndianReservation = ifelse(str_detect(designatedArea, "Indian Reservation$"), designatedArea, NA),
+           County = ifelse(str_detect(designatedArea, "(County)"), designatedArea, NA))
+flood <- flood |> relocate(IndianReservation, .after = designatedArea)
+flood <- flood |> relocate(County, .after = designatedArea)
+flood <- flood |> select(-designatedArea)
+```
+
+The `incidentBeginDate` and `incidentEndDate` is in format `Year-Month-DayT00:00:00.000Z`. I want to measure the duration of flood in days, so I first split the date into `BEGIN_YEAR`, `BEGIN_MONTH`, `BEGIN_DAY`, `END_YEAR`, `END_MONTH`, `END_DAY`, and calculate the duration using these six variables.
+
+```{r}
+#| echo: false
+
+##create year and month for begin and end data
+flood <- flood |>
+  mutate(incidentBeginDate = substr(incidentBeginDate, start = 1, stop = 10),
+         incidentEndDate = substr(incidentEndDate, start = 1, stop = 10))
+
+flood <- flood |>
+    separate_wider_delim(cols = incidentBeginDate, 
+                         delim = "-",
+                         names = c("BEGIN_YEAR","BEGIN_MONTH","BEGIN_DAY"))
+flood <- flood |>
+    separate_wider_delim(cols = incidentEndDate, 
+                         delim = "-",
+                         names = c("END_YEAR","END_MONTH","END_DAY"))
+#change to numeric
+flood$BEGIN_YEAR <- as.numeric(flood$BEGIN_YEAR)
+flood$BEGIN_MONTH <- as.numeric(flood$BEGIN_MONTH)
+flood$BEGIN_DAY <- as.numeric(flood$BEGIN_DAY)
+flood$END_YEAR <- as.numeric(flood$END_YEAR)
+flood$END_MONTH <- as.numeric(flood$END_MONTH)
+flood$END_DAY <- as.numeric(flood$END_DAY)
+
+#calculate. duration
+flood <- flood |>
+    mutate(duration = ((END_YEAR-BEGIN_YEAR)*12 + END_MONTH-BEGIN_MONTH)*30 + END_DAY - BEGIN_DAY + 1)
+```
+
+#### FEMA Financial Assistance Values
+
+The financial assistance value contains information includes the number of approved applications, as well as individual, public assistance, and hazard mitigation grant amounts. Here I'll call it `FA`. As `FA` and `flood` are from FEMA, and they both contain a `disasterNumber` column. I can use the `disasterNumber` to filter out the flood disaster in 2020 and 2021.
+
+```{r}
+#| echo: false
+
+FA <- read.csv("FemaWebDisasterSummaries.csv", header = T)
+#glimpse(FA)
+
+FA <- FA |>
+    semi_join(flood, by = "disasterNumber")
+FA <- FA |>
+    select(disasterNumber, totalNumberIaApproved, totalAmountIhpApproved, totalAmountHaApproved, totalAmountOnaApproved, totalObligatedAmountHmgp)
+
+print(paste("The column names of the FA dataset are:", toString(colnames(FA))))
+```
+
+Combine `FA` into `flood` and reorganize in the data, changing State Abbreviations into full names. Now `flood` contains information about flood State, specific region, time, duration, and different types of financial assistance.
+
+```{r}
+#| echo: false
+
+flood <- flood |>
+    left_join(FA, by = "disasterNumber")
+#translate state abbreviation to full name
+state_dict <- c(
+  WA = "Washington",
+  VA = "Virginia",
+  NH = "New Hampshire",
+  VT = "Vermont",
+  AZ = "Arizona",
+  TN = "Tennessee",
+  LA = "Louisiana",
+  WV = "West Virginia",
+  HI = "Hawaii",
+  KY = "Kentucky",
+  PR = "Puerto Rico",
+  ND = "North Dakota",
+  OR = "Oregon",
+  WI = "Wisconsin"
+)
+
+flood <- flood |>
+  mutate(state = state_dict[state])
+
+## remove (county)
+flood$County <- gsub(" \\(County\\)", "", flood$County)
+flood$County <- str_trim(flood$County, side = "both")
+rm(FA)
+
+print(paste("The column names of the flood dataset are:", toString(colnames(flood))))
+```
+
+#### NOAA Storm Data
+
+NOAA provides storm information in different years, I will focus on storm details and fatalities in 2020 and 2021. Here I use `Storm_D20` and `Storm_F20` for the detail and fatality in 2020, `Storm_D21` and `Storm_F21` in 2021.
+
+```{r}
+#| echo: false
+
+## read data
+Storm_D20 <- read.csv("StormEvents_details-ftp_v1.0_d2020_c20230927.csv", header = T)
+Storm_F20 <- read.csv("StormEvents_fatalities-ftp_v1.0_d2020_c20230927.csv", header = T)
+
+Storm_D21 <- read.csv("StormEvents_details-ftp_v1.0_d2021_c20231017.csv", header = T)
+Storm_F21 <- read.csv("StormEvents_fatalities-ftp_v1.0_d2021_c20231017.csv", header = T)
+```
+
+I aim to extract data detailing the duration of storm events across different regions, while also distinguishing whether these storms resulted in flooding. To achieve a comprehensive analysis, I will utilize the `EVENT_ID` as a unique identifier to merge and connect related events across various data sets.
+
+```{r}
+#| echo: false
+
+Storm_D20 <- Storm_D20 |>
+    select(EVENT_ID, BEGIN_YEARMONTH, BEGIN_DAY, END_YEARMONTH, END_DAY, STATE, FLOOD_CAUSE)
+Storm_F20 <- Storm_F20 |>
+    select(EVENT_ID, FATALITY_AGE, FATALITY_SEX)|>
+    mutate(FATALITY = 1)
+
+Storm_D21 <- Storm_D21 |>
+    select(EVENT_ID, BEGIN_YEARMONTH, BEGIN_DAY, END_YEARMONTH, END_DAY, STATE, FLOOD_CAUSE)
+Storm_F21 <- Storm_F21 |>
+    select(EVENT_ID, FATALITY_AGE, FATALITY_SEX)|>
+    mutate(FATALITY = 1)
+
+print(paste("The column names of Storm_D are:", toString(colnames(Storm_D20))))
+print(paste("The column names of Storm_F are:", toString(colnames(Storm_F20))))
+```
+
+I employ `EVENT_ID` as a key to merge the `Storm_D` and `Storm_F` data frames, thereby creating a consolidated `Storm` data frame. The suffixes "20" and "21" in the data frame names indicate the respective years of 2020 and 2021.
+
+```{r}
+#| echo: false
+
+## Combine together
+Storm20 <- Storm_D20 |>
+    left_join(Storm_F20, by = "EVENT_ID")
+Storm21 <- Storm_D21 |>
+    left_join(Storm_F21, by = "EVENT_ID")
+
+rm(Storm_D20, Storm_D21, Storm_F20, Storm_F21)
+```
+
+To calculate the duration of storm events, I first separate the `BEGIN_YEARMONTH` column into two new columns: `BEGIN_YEAR` and `BEGIN_MONTH`. With this temporal data disaggregated, I then compute the duration of each event in days, spanning both years of interest, 2020 and 2021.
+
+```{r}
+#| echo: false
+
+## crate Duration 2020
+Storm20 <- Storm20 |>
+  mutate(BEGIN_YEAR = substr(BEGIN_YEARMONTH, start = 1, stop = 4),
+         BEGIN_MONTH = substr(BEGIN_YEARMONTH, start = 5, stop = 6),
+         END_YEAR = substr(END_YEARMONTH, start = 1, stop = 4),
+         END_MONTH = substr(END_YEARMONTH, start = 5, stop = 6))
+
+Storm20$BEGIN_YEAR <- as.numeric(Storm20$BEGIN_YEAR)
+Storm20$BEGIN_MONTH <- as.numeric(Storm20$END_MONTH)
+Storm20$END_YEAR <- as.numeric(Storm20$BEGIN_YEAR)
+Storm20$END_MONTH <- as.numeric(Storm20$END_MONTH)
+
+Storm20 <- Storm20 |>
+    mutate(duration = ((END_YEAR-BEGIN_YEAR)*12 + END_MONTH-BEGIN_MONTH)*30 + END_DAY - BEGIN_DAY + 1)
+
+Storm20 <- Storm20 |>
+    mutate(FLOOD = ifelse(FLOOD_CAUSE == "", 0, 1))
+## Create duration 2021
+Storm21 <- Storm21 |>
+      mutate(BEGIN_YEAR = substr(BEGIN_YEARMONTH, start = 1, stop = 4),
+         BEGIN_MONTH = substr(BEGIN_YEARMONTH, start = 5, stop = 6),
+         END_YEAR = substr(END_YEARMONTH, start = 1, stop = 4),
+         END_MONTH = substr(END_YEARMONTH, start = 5, stop = 6))
+
+Storm21$BEGIN_YEAR <- as.numeric(Storm21$BEGIN_YEAR)
+Storm21$BEGIN_MONTH <- as.numeric(Storm21$END_MONTH)
+Storm21$END_YEAR <- as.numeric(Storm21$BEGIN_YEAR)
+Storm21$END_MONTH <- as.numeric(Storm21$END_MONTH)
+
+Storm21 <- Storm21 |>
+    mutate(duration = ((END_YEAR-BEGIN_YEAR)*12 + END_MONTH-BEGIN_MONTH)*30 + END_DAY - BEGIN_DAY + 1)
+```
+
+I have generated a FLOOD column which employs a binary coding system, where the value 1 indicates the storm event resulted in a flood, as derived from the FLOOD_CAUSE field, and 0 signifies a non-flood storm event.
+
+```{r}
+#| echo: false
+
+## Create a flood column
+Storm21 <- Storm21 |>
+    mutate(FLOOD = ifelse(FLOOD_CAUSE == "", 0, 1))
+```
+
+Finally, I restructured the data frames to enhance readability, ensuring that the information is presented in a clear and logical format.
+
+```{r}
+#| echo: false
+
+Storm20 <- Storm20 |>
+    select(EVENT_ID, STATE, BEGIN_YEAR, BEGIN_MONTH, BEGIN_DAY, END_YEAR, END_MONTH, END_DAY, duration, FLOOD, FLOOD_CAUSE, FATALITY, FATALITY_AGE, FATALITY_SEX)
+Storm21 <- Storm21 |>
+    select(EVENT_ID, STATE, BEGIN_YEAR, BEGIN_MONTH, BEGIN_DAY, END_YEAR, END_MONTH, END_DAY, duration, FLOOD, FLOOD_CAUSE, FATALITY, FATALITY_AGE, FATALITY_SEX)
+```
+
+#### CENSUS Information
+
+The CENSUS data frames are structured with designated regions across all US states represented in rows, while various socio-demographic variables, such as education level and gender, form the columns. My analysis will concentrate on the proportion of the population living below the poverty line. Given that there are separate files for each year, it's crucial to verify that the regions align in the same sequence to enable accurate year-over-year comparisons.
+
+```{r}
+#| echo: false
+
+S21 <- read.csv("ACSST5Y2021.S1701-Data.csv")
+S20 <- read.csv("ACSST5Y2020.S1701-Data.csv")
+
+#S21
+S21 <- S21[,grepl("E$",colnames(S21))]
+#S20
+S20 <- S20[,grepl("E$", colnames(S20))]
+#glimpse(S20)
+
+#Check their area name
+if (all(S21$NAME == S20$NAME)==TRUE){print("CENSUS2021 and CENSUS220 have the same area data")} 
+
+Area <- as.data.frame(S21$NAME)|>
+    separate_wider_delim(cols = `S21$NAME`,
+                         delim = ",",
+                         names = c("County","State"),
+                         too_few = "align_start",
+                         too_many = "error")
+```
+
+I will concentrate on examining the proportion of individuals living below the poverty line, segmented by gender. To this end, I have filtered the relevant data into two separate frames: P_pov21 for the year 2021, and P_pov20 for the year 2020.
+
+```{r}
+#| echo: false
+
+#delete useless information
+P_pov21 <- data.frame(Area, S21[,grepl("C03", colnames(S21))])
+colnames(P_pov21) <- P_pov21[1,]
+P_pov21 <- P_pov21[-1,]
+
+colnames(P_pov21) <- sapply(colnames(P_pov21), function(x) gsub("Estimate!!Percent below poverty level!!", "", x))
+
+#gender
+colnames(P_pov21) <- sapply(colnames(P_pov21), function(x) gsub("Population for whom poverty status is determined!!SEX!!", "sex_", x))
+
+colnames(P_pov21)[2] <- "STATE"
+Pov21 <- P_pov21 |>
+    select(`Geographic Area Name`, STATE, `Population for whom poverty status is determined`, sex_Female, sex_Male)
+colnames(Pov21) <- c("COUNTY", "STATE", "TOTAL_PERCENT", "FEMALE_PERCENT", "MALE_PERCENT")
+Pov21$COUNTY <- gsub("County", "", Pov21$COUNTY)
+Pov21$COUNTY <- str_trim(Pov21$COUNTY, side = "both")
+Pov21$STATE <- str_trim(Pov21$STATE, side = "both")
+Pov21$YEAR <- 2021
+rm(S21, P_pov21)
+```
+
+```{r}
+#| echo: false
+
+#delete useless information
+P_pov20 <- data.frame(Area, S20[,grepl("C03", colnames(S20))])
+colnames(P_pov20) <- P_pov20[1,]
+P_pov20 <- P_pov20[-1,]
+
+colnames(P_pov20) <- sapply(colnames(P_pov20), function(x) gsub("Estimate!!Percent below poverty level!!", "", x))
+
+#gender
+colnames(P_pov20) <- sapply(colnames(P_pov20), function(x) gsub("Population for whom poverty status is determined!!SEX!!", "sex_", x))
+
+colnames(P_pov20)[2] <- "STATE"
+Pov20 <- P_pov20 |>
+    select(`Geographic Area Name`, STATE, `Population for whom poverty status is determined`, sex_Female, sex_Male)
+colnames(Pov20) <- c("COUNTY", "STATE", "TOTAL_PERCENT", "FEMALE_PERCENT", "MALE_PERCENT")
+Pov20$COUNTY <- gsub("County", "", Pov20$COUNTY)
+Pov20$COUNTY <- str_trim(Pov20$COUNTY, side = "both")
+Pov20$STATE <- str_trim(Pov20$STATE, side = "both")
+Pov20$YEAR <- 2020
+
+rm(P_pov20, S20)
+```
+
+## References
+
+#### NOAA data:
+
+[NOAA Storm Event Database](https://www.ncdc.noaa.gov/stormevents/ftp.jsp)
+
+#### FEMA data:
+
+[FEMA Dataset: Disaster Declaration Summaries - v2](https://www.fema.gov/openfema-data-page/disaster-declarations-summaries-v2) [FEMA Dataset: FEMA Web Disaster Summaries - v1](https://www.fema.gov/openfema-data-page/fema-web-disaster-summaries-v1)
+
+#### CENSUS data:
+
+[CENSUS](https://www.census.gov/)
+
+## Initial Questions
+
+-   Which U.S. states recorded the greatest number of storm occurrences in the years 2020 and 2021?
+
+-   What was the monthly rainfall distribution pattern across the U.S. during 2020-2021?
+
+-   What was the severity and fatality rate associated with floods in the U.S. throughout 2020-2021?
+
+-   Is there a discernible correlation between the duration of storms and the likelihood of resulting floods during 2020-2021?
+
+-   What forms of support and assistance has the government provided to regions affected by flooding in 2020-2021?
+
+## EDA
+
+#### Monthly Storms and Floods for 2020 and 2021
+
+```{r}
+#| warning: false
+#| message: false
+#| echo: false
+
+Storm <- rbind(Storm20, Storm21)
+
+plot1 <- Storm |>
+  group_by(BEGIN_YEAR, BEGIN_MONTH) |>
+  summarise(total_storms = n(),
+            total_floods = sum(FLOOD, na.rm = TRUE))
+
+ggplot(plot1, aes(x = factor(BEGIN_MONTH))) +
+    # total_storm
+    geom_bar(aes(y = total_storms, fill = as.factor(BEGIN_YEAR)), 
+           position = "dodge", 
+           stat = "identity", 
+           width = 0.8) +
+    # total_flood
+    geom_bar(aes(y = total_floods, 
+                 fill = ifelse(as.factor(BEGIN_YEAR) == "2020", "2020_flood", "2021_flood")),
+             position = "dodge", stat = "identity", width = 0.8) +
+  
+  labs(x = "Month", 
+       y = "Number of Events",
+       fill = "Event Type",
+       title = "Monthly Storms and Floods for 2020 and 2021",
+       subtitle = "Bars represent total events; Text labels show flood percentage.",
+       caption = "Source: NOAA") +
+  
+  theme_minimal(base_size = 13) +
+  
+  scale_fill_manual(values = c("2020" = "#1f77b4", 
+                               "2021" = "#d62728",
+                               "2020_flood" = "#aec7e8",
+                               "2021_flood" = "#ff9896"),
+                    labels = c("2020 (Storm)", "2020(Flood)", "2021 (Storm)", "2021 (Flood)")) +
+  
+  scale_x_discrete(labels = c("1" = "January", 
+                              "2" = "February", 
+                              "3" = "March", 
+                              "4" = "April", 
+                              "5" = "May", 
+                              "6" = "June", 
+                              "7" = "July", 
+                              "8" = "August", 
+                              "9" = "September", 
+                              "10" = "October", 
+                              "11" = "November", 
+                              "12" = "December")) +
+  
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5, size = 16),
+    plot.subtitle = element_text(hjust = 0.5, size = 12, face = "italic"),
+    legend.title = element_text(face = "bold"),
+    plot.caption = element_text(hjust = 0, face = "italic"),
+    legend.position = "top"
+  )
+```
+
+-   The frequency of storms reached its zenith in the summer months of June through August, accompanied by a significant increase in storm activity in February of 2021.
+
+-   Flood-related disasters were most common in March and September, indicating seasonal peaks in flood occurrences.
+
+-   December experienced the lowest incidence of floods, indicating a seasonal downturn in such events
+
+#### Monthly Fatalities by Flood for Top 20 States
+
+```{r}
+#| warning: false
+#| message: false
+#| echo: false
+
+plot2 <- Storm |> filter(FATALITY == 1) |> select(STATE,BEGIN_YEAR, BEGIN_MONTH)
+
+plot2 <- plot2 |> 
+  group_by(STATE, BEGIN_MONTH, BEGIN_YEAR) |> 
+  summarise(event_count = n()) |> 
+  ungroup()
+
+top_20_states <- plot2 |> 
+  group_by(STATE) |> 
+  summarise(total_events = sum(event_count)) |> 
+  arrange(-total_events) |> 
+  head(20) |> 
+  pull(STATE)
+
+filtered_data <- plot2[plot2$STATE %in% top_20_states, ]
+
+ggplot(filtered_data, aes(x = factor(BEGIN_MONTH), y = STATE)) + 
+  geom_point(aes(size = event_count, color = STATE), alpha = 0.7) + 
+  scale_size_continuous(guide = "legend") +
+  facet_wrap(~BEGIN_YEAR, scales = "free_y") +
+  labs(
+    x = "Month", 
+    y = "State", 
+    title = "Monthly Fatalities by Flood for Top 20 States",
+    subtitle = "Years 2020 and 2021",
+    caption = "Source: NOAA & FEMA"
+  ) +
+  scale_x_discrete(labels = c(
+    "1" = "Jan", "2" = "Feb", "3" = "Mar", "4" = "Apr", "5" = "May", 
+    "6" = "Jun", "7" = "Jul", "8" = "Aug", "9" = "Sep", "10" = "Oct", 
+    "11" = "Nov", "12" = "Dec"
+  )) +
+  scale_color_discrete(guide = FALSE) + 
+  theme_minimal(base_size = 10) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.text = element_text(size = 8),
+    axis.title = element_text(size = 12, face = "bold"),
+    plot.title = element_text(hjust = 0.5, size = 14),
+    plot.subtitle = element_text(hjust = 0.5, size = 12, face = "italic"),
+    legend.position = "right",
+    legend.title = element_text(face = "bold"),
+    panel.grid.major = element_line(color = "gray85"),
+    panel.grid.minor = element_line(color = "gray95"),
+    strip.background = element_rect(fill = "gray95"),
+    plot.caption = element_text(hjust = 0, face = "italic"),
+    strip.text = element_text(face = "bold")
+  )
+```
+
+-   The visual analysis of fatality data reveals distinct patterns of flood-related deaths across various regions. Notably, Arizona experienced a significant number of fatalities during the monsoon season, spanning from June to September, in both 2020 and 2021.
+
+-   In February 2021, Texas encountered a particularly lethal flood, while Oregon reported a severe flood in June of the same year.
+
+-   Moreover, Wisconsin, Texas, and California consistently reported fatalities due to flooding throughout the two-year period, indicating a persistent risk of dangerous flooding events in these states.
+
+#### Relationship between Financial Assistance and Poverty Percentage
+
+```{r}
+#| warning: false
+#| message: false
+#| echo: false
+
+Pov <- rbind(Pov20, Pov21)
+plot3 <- flood |>
+    filter(is.na(IndianReservation)) |> filter(!is.na(County)) |>
+    select(state, County, BEGIN_YEAR, totalNumberIaApproved, totalAmountIhpApproved, totalAmountHaApproved, totalAmountOnaApproved, totalObligatedAmountHmgp)
+plot3 <- plot3 |>
+  left_join(Pov, by = c("BEGIN_YEAR" = "YEAR", "County" = "COUNTY", "state" = "STATE"))
+
+#make NA to be 1
+plot3$totalNumberIaApproved[is.na(plot3$totalNumberIaApproved)] <- 1
+plot3$totalAmountIhpApproved[is.na(plot3$totalAmountIhpApproved)] <- 1
+plot3$totalAmountHaApproved[is.na(plot3$totalAmountHaApproved)] <- 1
+plot3$totalAmountOnaApproved[is.na(plot3$totalAmountOnaApproved)] <- 1
+plot3$totalObligatedAmountHmgp[is.na(plot3$totalObligatedAmountHmgp)] <- 1
+
+plot3 <- plot3 |>
+    mutate(FA = totalAmountIhpApproved + totalAmountHaApproved + totalAmountOnaApproved + totalObligatedAmountHmgp,
+           log_FA = log(FA))
+plot3$TOTAL_PERCENT <- as.integer(plot3$TOTAL_PERCENT)
+
+plot3 |>
+  ggplot(mapping = aes(x = log_FA, y = TOTAL_PERCENT, color = state)) + 
+  geom_jitter(alpha = 0.6, width = 0.1, height = 0) + 
+  facet_wrap(~BEGIN_YEAR) +
+  scale_y_continuous(labels = scales::percent_format(scale = 1)) + # 将y轴的刻度转换为百分比格式
+  labs(
+      y = "Percentage of Population Below Poverty Line",
+      x = "Ln(Total Financial Assistance)",
+      color = "State", 
+      title = "Relationship between Financial Assistance and Poverty Percentage",
+      subtitle = "Years 2020 and 2021",
+      caption = "Source: CENCUS & FEMA"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.text = element_text(size = 8),
+    axis.title = element_text(size = 12, face = "bold"),
+    plot.title = element_text(hjust = 0.5, size = 14),
+    plot.subtitle = element_text(hjust = 0.5, size = 12, face = "italic"),
+    legend.position = "right",
+    legend.title = element_text(face = "bold"),
+    panel.grid.major = element_line(color = "gray85"),
+    panel.grid.minor = element_line(color = "gray95"),
+    strip.background = element_rect(fill = "gray95"),
+    plot.caption = element_text(hjust = 0, face = "italic"),
+    strip.text = element_text(face = "bold")
+  )
+```
+
+-   Each data point corresponds to a county, with the color coding indicative of the state. The trend appears to suggest that states with a higher percentage of the population living below the poverty line tend to receive greater financial assistance from the government.
+
+-   Nonetheless, the relationship is not straightforward, as evident by the considerable variation in financial support provided to states with comparable poverty levels.
+
+#### Predicted Probability of Flood by Storm Duration
+
+```{r}
+#| warning: false
+#| message: false
+#| echo: false
+
+Plot4 <- Storm |> select(BEGIN_YEAR, BEGIN_MONTH, duration, FLOOD)
+
+Plot4$BEGIN_MONTH <- as.factor(Plot4$BEGIN_MONTH)
+
+month.names <- c('January', 'February', 'March', 'April', 'May', 'June', 
+                 'July', 'August', 'September', 'October', 'November', 'December')
+
+Plot4$MONTH_NAME <- factor(month.names[as.integer(levels(Plot4$BEGIN_MONTH))[Plot4$BEGIN_MONTH]])
+
+## regression
+logit_model <- glm(FLOOD ~ duration + MONTH_NAME + factor(BEGIN_YEAR), 
+                   data = Plot4, 
+                   family = binomial)
+summary(logit_model)
+## prediction
+Plot4$predicted_prob <- predict(logit_model, newdata = Plot4, type = "response")
+
+
+ggplot(Plot4, aes(x = duration, y = predicted_prob)) +
+  geom_point(aes(color = MONTH_NAME), alpha = 0.6) +
+  geom_smooth(method = "glm", method.args = list(family = binomial), se = FALSE) +
+  facet_wrap(~BEGIN_YEAR) +
+  labs(x = "Storm Duration (days)", 
+       y = "Predicted Probability of Flood",
+       color = "Month",
+       title = "Predicted Probability of Flood by Storm Duration",
+       subtitle = "Years 2020 and 2021",
+       caption = "Source: NOAA") +
+  theme_minimal(base_size = 10) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.text = element_text(size = 8),
+    axis.title = element_text(size = 12, face = "bold"),
+    plot.title = element_text(hjust = 0.5, size = 14),
+    plot.subtitle = element_text(hjust = 0.5, size = 12, face = "italic"),
+    legend.position = "right",
+    legend.title = element_text(face = "bold"),
+    panel.grid.major = element_line(color = "gray85"),
+    panel.grid.minor = element_line(color = "gray95"),
+    strip.background = element_rect(fill = "gray95"),
+    plot.caption = element_text(hjust = 0, face = "italic"),
+    strip.text = element_text(face = "bold")
+  )
+```
+
+-   In the final stage of analysis, I conducted a logistic regression using storm duration and month variables---stratified by the years 2021 and 2022---as predictors for the likelihood of flooding.
+
+-   The results indicate a counterintuitive negative relationship between storm duration and the probability of a flood event. Specifically, as the duration of a storm extends over more days, the likelihood of it resulting in a flood appears to diminish.

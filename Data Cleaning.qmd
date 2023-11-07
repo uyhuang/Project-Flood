@@ -509,3 +509,47 @@ plot3 |>
   )
 
 ```
+
+```{r}
+Plot4 <- Storm |> select(BEGIN_YEAR, BEGIN_MONTH, duration, FLOOD)
+
+Plot4$BEGIN_MONTH <- as.factor(Plot4$BEGIN_MONTH)
+
+month.names <- c('January', 'February', 'March', 'April', 'May', 'June', 
+                 'July', 'August', 'September', 'October', 'November', 'December')
+
+Plot4$MONTH_NAME <- factor(month.names[as.integer(levels(Plot4$BEGIN_MONTH))[Plot4$BEGIN_MONTH]])
+
+## regression
+logit_model <- glm(FLOOD ~ duration + MONTH_NAME + factor(BEGIN_YEAR), 
+                   data = Plot4, 
+                   family = binomial)
+## prediction
+Plot4$predicted_prob <- predict(logit_model, newdata = Plot4, type = "response")
+
+
+ggplot(Plot4, aes(x = duration, y = predicted_prob)) +
+  geom_point(aes(color = MONTH_NAME), alpha = 0.6) +
+  geom_smooth(method = "glm", method.args = list(family = binomial), se = FALSE) +
+  facet_wrap(~BEGIN_YEAR) +
+  labs(x = "Storm Duration (days)", 
+       y = "Predicted Probability of Flood",
+       color = "Month",
+       title = "Predicted Probability of Flood by Storm Duration") +
+  theme_minimal(base_size = 10) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.text = element_text(size = 8),
+    axis.title = element_text(size = 12, face = "bold"),
+    plot.title = element_text(hjust = 0.5, size = 14),
+    plot.subtitle = element_text(hjust = 0.5, size = 12, face = "italic"),
+    legend.position = "right",
+    legend.title = element_text(face = "bold"),
+    panel.grid.major = element_line(color = "gray85"),
+    panel.grid.minor = element_line(color = "gray95"),
+    strip.background = element_rect(fill = "gray95"),
+    plot.caption = element_text(hjust = 0, face = "italic"),
+    strip.text = element_text(face = "bold")
+  )
+
+```
