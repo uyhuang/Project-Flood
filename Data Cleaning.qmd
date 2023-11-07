@@ -9,19 +9,503 @@ editor: visual
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-```
-
-```{r}
-#| warning: false
-#| message: false
-#| echo: false
-
 library(knitr)
 library(tidyverse)
+library(scales)
+```
+
+## FEMA Disaster
+
+we only want flood data during 2021 and 2020, so we need to look at the data about flood from 2020 to 2021
+
+```{r}
+flood <- read.csv("DisasterDeclarationsSummaries.csv", header = T)
+## filter out flood disaster only and during 2020-2021
+flood <- flood |>
+    filter((incidentType == "Flood")&
+               (str_starts(incidentBeginDate, "2020-")|str_starts(incidentBeginDate, "2021-")))
+FA <- read.csv("FemaWebDisasterSummaries.csv", header = T)
+```
+
+cleaning flood data
+
+```{r}
+##remove uneeded colomns
+## I remove some declaration strings, and some information that we alread know, like incident type is flood, declaration type is DR
+## tribal request is all 0, means was not submitted directly to the President, independently of a state, by a Tribal Nation.
+flood <- flood |> 
+    select(disasterNumber, state, designatedArea, ihProgramDeclared, iaProgramDeclared, paProgramDeclared, hmProgramDeclared, incidentBeginDate, incidentEndDate)
+
+##separate 
+flood <- flood |>
+    mutate(IndianReservation = ifelse(str_detect(designatedArea, "Indian Reservation$"), designatedArea, NA),
+           County = ifelse(str_detect(designatedArea, "(County)"), designatedArea, NA))
+flood <- flood |> relocate(IndianReservation, .after = designatedArea)
+flood <- flood |> relocate(County, .after = designatedArea)
+flood <- flood |> select(-designatedArea)
+
+##create year and month for begin and end data
+flood <- flood |>
+  mutate(incidentBeginDate = substr(incidentBeginDate, start = 1, stop = 10),
+         incidentEndDate = substr(incidentEndDate, start = 1, stop = 10))
+
+flood <- flood |>
+    separate_wider_delim(cols = incidentBeginDate, 
+                         delim = "-",
+                         names = c("BEGIN_YEAR","BEGIN_MONTH","BEGIN_DAY"))
+flood <- flood |>
+    separate_wider_delim(cols = incidentEndDate, 
+                         delim = "-",
+                         names = c("END_YEAR","END_MONTH","END_DAY"))
+#change to numberic
+flood$BEGIN_YEAR <- as.numeric(flood$BEGIN_YEAR)
+flood$BEGIN_MONTH <- as.numeric(flood$BEGIN_MONTH)
+flood$BEGIN_DAY <- as.numeric(flood$BEGIN_DAY)
+flood$END_YEAR <- as.numeric(flood$END_YEAR)
+flood$END_MONTH <- as.numeric(flood$END_MONTH)
+flood$END_DAY <- as.numeric(flood$END_DAY)
+
+#calculate. duration
+flood <- flood |>
+    mutate(duration = ((END_YEAR-BEGIN_YEAR)*12 + END_MONTH-BEGIN_MONTH)*30 + END_DAY - BEGIN_DAY + 1)
+
+```
+
+cleaning FA data
+
+```{r}
+#glimpse(FA)
+FA <- FA |>
+    semi_join(flood, by = "disasterNumber")
+FA <- FA |>
+    select(disasterNumber, totalNumberIaApproved, totalAmountIhpApproved, totalAmountHaApproved, totalAmountOnaApproved, totalObligatedAmountHmgp)
+```
+
+combine FA and flood together and relocate
+
+```{r}
+flood <- flood |>
+    left_join(FA, by = "disasterNumber")
+#translate state abbreviation to full name
+state_dict <- c(
+  WA = "Washington",
+  VA = "Virginia",
+  NH = "New Hampshire",
+  VT = "Vermont",
+  AZ = "Arizona",
+  TN = "Tennessee",
+  LA = "Louisiana",
+  WV = "West Virginia",
+  HI = "Hawaii",
+  KY = "Kentucky",
+  PR = "Puerto Rico",
+  ND = "North Dakota",
+  OR = "Oregon",
+  WI = "Wisconsin"
+)
+
+flood <- flood |>
+  mutate(state = state_dict[state])
+
+## remove (county)
+flood$County <- gsub(" \\(County\\)", "", flood$County)
+flood$County <- str_trim(flood$County, side = "both")
+rm(FA)
+```
+
+## Storm Data
+
+```{r}
+## read data
+Storm_D20 <- read.csv("StormEvents_details-ftp_v1.0_d2020_c20230927.csv", header = T)
+Storm_F20 <- read.csv("StormEvents_fatalities-ftp_v1.0_d2020_c20230927.csv", header = T)
+
+Storm_D21 <- read.csv("StormEvents_details-ftp_v1.0_d2021_c20231017.csv", header = T)
+Storm_F21 <- read.csv("StormEvents_fatalities-ftp_v1.0_d2021_c20231017.csv", header = T)
+```
+
+clean and combine information about storm together
+
+```{r}
+Storm_D20 <- Storm_D20 |>
+    select(EVENT_ID, BEGIN_YEARMONTH, BEGIN_DAY, END_YEARMONTH, END_DAY, STATE, FLOOD_CAUSE)
+Storm_F20 <- Storm_F20 |>
+    select(EVENT_ID, FATALITY_AGE, FATALITY_SEX)|>
+    mutate(FATALITY = 1)
+
+Storm_D21 <- Storm_D21 |>
+    select(EVENT_ID, BEGIN_YEARMONTH, BEGIN_DAY, END_YEARMONTH, END_DAY, STATE, FLOOD_CAUSE)
+Storm_F21 <- Storm_F21 |>
+    select(EVENT_ID, FATALITY_AGE, FATALITY_SEX)|>
+    mutate(FATALITY = 1)
+## Combine together
+Storm20 <- Storm_D20 |>
+    left_join(Storm_F20, by = "EVENT_ID")
+Storm21 <- Storm_D21 |>
+    left_join(Storm_F21, by = "EVENT_ID")
+
+rm(Storm_D20, Storm_D21, Storm_F20, Storm_F21)
+
+## crate Duration 2020
+Storm20 <- Storm20 |>
+  mutate(BEGIN_YEAR = substr(BEGIN_YEARMONTH, start = 1, stop = 4),
+         BEGIN_MONTH = substr(BEGIN_YEARMONTH, start = 5, stop = 6),
+         END_YEAR = substr(END_YEARMONTH, start = 1, stop = 4),
+         END_MONTH = substr(END_YEARMONTH, start = 5, stop = 6))
+
+Storm20$BEGIN_YEAR <- as.numeric(Storm20$BEGIN_YEAR)
+Storm20$BEGIN_MONTH <- as.numeric(Storm20$END_MONTH)
+Storm20$END_YEAR <- as.numeric(Storm20$BEGIN_YEAR)
+Storm20$END_MONTH <- as.numeric(Storm20$END_MONTH)
+
+Storm20 <- Storm20 |>
+    mutate(duration = ((END_YEAR-BEGIN_YEAR)*12 + END_MONTH-BEGIN_MONTH)*30 + END_DAY - BEGIN_DAY + 1)
+
+Storm20 <- Storm20 |>
+    mutate(FLOOD = ifelse(FLOOD_CAUSE == "", 0, 1))
+## Create duration 2021
+Storm21 <- Storm21 |>
+      mutate(BEGIN_YEAR = substr(BEGIN_YEARMONTH, start = 1, stop = 4),
+         BEGIN_MONTH = substr(BEGIN_YEARMONTH, start = 5, stop = 6),
+         END_YEAR = substr(END_YEARMONTH, start = 1, stop = 4),
+         END_MONTH = substr(END_YEARMONTH, start = 5, stop = 6))
+
+Storm21$BEGIN_YEAR <- as.numeric(Storm21$BEGIN_YEAR)
+Storm21$BEGIN_MONTH <- as.numeric(Storm21$END_MONTH)
+Storm21$END_YEAR <- as.numeric(Storm21$BEGIN_YEAR)
+Storm21$END_MONTH <- as.numeric(Storm21$END_MONTH)
+
+Storm21 <- Storm21 |>
+    mutate(duration = ((END_YEAR-BEGIN_YEAR)*12 + END_MONTH-BEGIN_MONTH)*30 + END_DAY - BEGIN_DAY + 1)
+
+Storm21 <- Storm21 |>
+    mutate(FLOOD = ifelse(FLOOD_CAUSE == "", 0, 1))
+```
+
+organzie Storm
+
+```{r}
+Storm20 <- Storm20 |>
+    select(EVENT_ID, STATE, BEGIN_YEAR, BEGIN_MONTH, BEGIN_DAY, END_YEAR, END_MONTH, END_DAY, duration, FLOOD, FLOOD_CAUSE, FATALITY, FATALITY_AGE, FATALITY_SEX)
+Storm21 <- Storm21 |>
+    select(EVENT_ID, STATE, BEGIN_YEAR, BEGIN_MONTH, BEGIN_DAY, END_YEAR, END_MONTH, END_DAY, duration, FLOOD, FLOOD_CAUSE, FATALITY, FATALITY_AGE, FATALITY_SEX)
 ```
 
 ## Loading Data
 
 ```{r}
-a <- read.csv("ACSST5Y2021.S1701-Data.csv")
+S21 <- read.csv("ACSST5Y2021.S1701-Data.csv")
+S20 <- read.csv("ACSST5Y2020.S1701-Data.csv")
+```
+
+## remove columns other than estimate
+
+```{r}
+#S21
+S21 <- S21[,grepl("E$",colnames(S21))]
+#S20
+S20 <- S20[,grepl("E$", colnames(S20))]
+#glimpse(S20)
+#S is the data about poverty
+#C01 is total population that determined poverty level
+#C02 is the data about those below Porverty level
+#C03 is the data about the percent below poverty level
+
+#B21
+#B21 <- B21[,grepl("E$",colnames(B21))]
+#B20
+#B20 <- B20[,grepl("E$", colnames(B20))]
+#glimpse(B20)
+
+
+#glimpse(D20)
+#D is the data about total population
+#E is about gender, age, race, voting age population
+#P is about. the percent  of race
+
+#Check their area name
+if (all(S21$NAME == S20$NAME)==TRUE){print("S21 and S20 have the same area data")} 
+
+#if (all(B21$NAME == B20$NAME)==TRUE){print("B21 and B20 have the same area data")}    
+    
+#if (all(D21$NAME == D20$NAME)==TRUE){print("D21 and D20 have the same area data")}    
+
+#if (all(S21$NAME == B21$NAME)==TRUE & all(S21$NAME == D21$NAME)==TRUE){print("All the data have the same area data")} 
+
+Area <- as.data.frame(S21$NAME)|>
+    separate_wider_delim(cols = `S21$NAME`,
+                         delim = ",",
+                         names = c("County","State"),
+                         too_few = "align_start",
+                         too_many = "error")
+    
+```
+
+## S21
+
+I will use "T" for total, "B" for below, "P" for percent, "pov" for poverty
+
+end with 21 is 2021, end with 20 is 2020
+
+```{r}
+T_pov21 <- data.frame(Area, S21[,grepl("C01", colnames(S21))])
+B_pov21 <- data.frame(Area, S21[,grepl("C02", colnames(S21))])
+P_pov21 <- data.frame(Area, S21[,grepl("C03", colnames(S21))])
+#TBP in 2021 have same amount of columns
+
+#delete useless information
+colnames(T_pov21) <- T_pov21[1,]
+T_pov21 <- T_pov21[-1,]
+
+colnames(T_pov21)
+
+colnames(T_pov21) <- sapply(colnames(T_pov21), function(x) gsub("Estimate!!Total!!", "", x))
+
+#age
+colnames(T_pov21) <- sapply(colnames(T_pov21), function(x) gsub("Population for whom poverty status is determined!!AGE!!", "age_", x))
+colnames(T_pov21) <- sapply(colnames(T_pov21), function(x) gsub("Under 18 years!!", "", x))
+colnames(T_pov21) <- sapply(colnames(T_pov21), function(x) gsub("18 to 64 years!!", "", x))
+
+#gender
+colnames(T_pov21) <- sapply(colnames(T_pov21), function(x) gsub("Population for whom poverty status is determined!!SEX!!", "sex_", x))
+
+#Race
+colnames(T_pov21) <- sapply(colnames(T_pov21), function(x) gsub("Population for whom poverty status is determined!!RACE AND HISPANIC OR LATINO ORIGIN!!", "race_", x))
+
+#Education
+colnames(T_pov21) <- sapply(colnames(T_pov21), function(x) gsub("Population for whom poverty status is determined!!EDUCATIONAL ATTAINMENT!!", "edu_", x))
+colnames(T_pov21) <- sapply(colnames(T_pov21), function(x) gsub("Population 25 years and over!!", "", x))
+
+#Employment status
+colnames(T_pov21) <- sapply(colnames(T_pov21), function(x) gsub("Population for whom poverty status is determined!!EMPLOYMENT STATUS!!", "emp_", x))
+colnames(T_pov21) <- sapply(colnames(T_pov21), function(x) gsub("Civilian labor force 16 years and over!!", "", x))
+
+#Work experience
+colnames(T_pov21) <- sapply(colnames(T_pov21), function(x) gsub("Population for whom poverty status is determined!!WORK EXPERIENCE!!", "exp_", x))
+colnames(T_pov21) <- sapply(colnames(T_pov21), function(x) gsub("Population 16 years and over!!", "", x))
+
+#Below the following poverty ratio
+colnames(T_pov21) <- sapply(colnames(T_pov21), function(x) gsub("Population for whom poverty status is determined!!ALL INDIVIDUALS WITH INCOME BELOW THE FOLLOWING POVERTY RATIOS!!", "below_", x))
+
+
+```
+
+```{r}
+#delete useless information
+P_pov21 <- data.frame(Area, S21[,grepl("C03", colnames(S21))])
+colnames(P_pov21) <- P_pov21[1,]
+P_pov21 <- P_pov21[-1,]
+
+colnames(P_pov21) <- sapply(colnames(P_pov21), function(x) gsub("Estimate!!Percent below poverty level!!", "", x))
+
+#gender
+colnames(P_pov21) <- sapply(colnames(P_pov21), function(x) gsub("Population for whom poverty status is determined!!SEX!!", "sex_", x))
+
+colnames(P_pov21)[2] <- "STATE"
+Pov21 <- P_pov21 |>
+    select(`Geographic Area Name`, STATE, `Population for whom poverty status is determined`, sex_Female, sex_Male)
+colnames(Pov21) <- c("COUNTY", "STATE", "TOTAL_PERCENT", "FEMALE_PERCENT", "MALE_PERCENT")
+Pov21$COUNTY <- gsub("County", "", Pov21$COUNTY)
+Pov21$COUNTY <- str_trim(Pov21$COUNTY, side = "both")
+Pov21$STATE <- str_trim(Pov21$STATE, side = "both")
+Pov21$YEAR <- 2021
+rm(S21, P_pov21)
+```
+
+```{r}
+#delete useless information
+P_pov20 <- data.frame(Area, S20[,grepl("C03", colnames(S20))])
+colnames(P_pov20) <- P_pov20[1,]
+P_pov20 <- P_pov20[-1,]
+
+colnames(P_pov20) <- sapply(colnames(P_pov20), function(x) gsub("Estimate!!Percent below poverty level!!", "", x))
+
+#gender
+colnames(P_pov20) <- sapply(colnames(P_pov20), function(x) gsub("Population for whom poverty status is determined!!SEX!!", "sex_", x))
+
+colnames(P_pov20)[2] <- "STATE"
+Pov20 <- P_pov20 |>
+    select(`Geographic Area Name`, STATE, `Population for whom poverty status is determined`, sex_Female, sex_Male)
+colnames(Pov20) <- c("COUNTY", "STATE", "TOTAL_PERCENT", "FEMALE_PERCENT", "MALE_PERCENT")
+Pov20$COUNTY <- gsub("County", "", Pov20$COUNTY)
+Pov20$COUNTY <- str_trim(Pov20$COUNTY, side = "both")
+Pov20$STATE <- str_trim(Pov20$STATE, side = "both")
+Pov20$YEAR <- 2020
+
+rm(P_pov20, S20)
+```
+
+## EDA
+
+#### Plot 1
+
+```{r}
+Storm <- rbind(Storm20, Storm21)
+
+plot1 <- Storm |>
+  group_by(BEGIN_YEAR, BEGIN_MONTH) |>
+  summarise(total_storms = n(),
+            total_floods = sum(FLOOD, na.rm = TRUE))
+
+ggplot(plot1, aes(x = factor(BEGIN_MONTH))) +
+    # total_storm
+    geom_bar(aes(y = total_storms, fill = as.factor(BEGIN_YEAR)), 
+           position = "dodge", 
+           stat = "identity", 
+           width = 0.8) +
+    # total_flood
+    geom_bar(aes(y = total_floods, 
+                 fill = ifelse(as.factor(BEGIN_YEAR) == "2020", "2020_flood", "2021_flood")),
+             position = "dodge", stat = "identity", width = 0.8) +
+  
+  labs(x = "Month", 
+       y = "Number of Events",
+       fill = "Event Type",
+       title = "Monthly Storms and Floods for 2020 and 2021",
+       subtitle = "Bars represent total events; Text labels show flood percentage.",
+       caption = "Source: NOAA") +
+  
+  theme_minimal(base_size = 13) +
+  
+  scale_fill_manual(values = c("2020" = "#1f77b4", 
+                               "2021" = "#d62728",
+                               "2020_flood" = "#aec7e8",
+                               "2021_flood" = "#ff9896"),
+                    labels = c("2020 (Storm)", "2020(Flood)", "2021 (Storm)", "2021 (Flood)")) +
+  
+  scale_x_discrete(labels = c("1" = "January", 
+                              "2" = "February", 
+                              "3" = "March", 
+                              "4" = "April", 
+                              "5" = "May", 
+                              "6" = "June", 
+                              "7" = "July", 
+                              "8" = "August", 
+                              "9" = "September", 
+                              "10" = "October", 
+                              "11" = "November", 
+                              "12" = "December")) +
+  
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5, size = 16),
+    plot.subtitle = element_text(hjust = 0.5, size = 12, face = "italic"),
+    legend.title = element_text(face = "bold"),
+    plot.caption = element_text(hjust = 0, face = "italic"),
+    legend.position = "top"
+  )
+
+```
+
+-   The storm happened most frequently in June, July, and August. Also, there's a high amount of storm in February 2021
+
+-   The proportion of disaster is high in March and September
+
+#### Plot 2
+
+```{r}
+plot2 <- Storm |> filter(FATALITY == 1) |> select(STATE,BEGIN_YEAR, BEGIN_MONTH)
+
+plot2 <- plot2 |> 
+  group_by(STATE, BEGIN_MONTH, BEGIN_YEAR) |> 
+  summarise(event_count = n()) |> 
+  ungroup()
+
+top_20_states <- plot2 |> 
+  group_by(STATE) |> 
+  summarise(total_events = sum(event_count)) |> 
+  arrange(-total_events) |> 
+  head(20) |> 
+  pull(STATE)
+
+filtered_data <- plot2[plot2$STATE %in% top_20_states, ]
+
+ggplot(filtered_data, aes(x = factor(BEGIN_MONTH), y = STATE)) + 
+  geom_point(aes(size = event_count, color = STATE), alpha = 0.7) + 
+  scale_size_continuous(guide = "legend") +
+  facet_wrap(~BEGIN_YEAR, scales = "free_y") +
+  labs(
+    x = "Month", 
+    y = "State", 
+    title = "Monthly Fatalities by Flood for Top 20 States",
+    subtitle = "Years 2020 and 2021",
+    caption = "Source: NOAA & FEMA"
+  ) +
+  scale_x_discrete(labels = c(
+    "1" = "Jan", "2" = "Feb", "3" = "Mar", "4" = "Apr", "5" = "May", 
+    "6" = "Jun", "7" = "Jul", "8" = "Aug", "9" = "Sep", "10" = "Oct", 
+    "11" = "Nov", "12" = "Dec"
+  )) +
+  scale_color_discrete(guide = FALSE) + 
+  theme_minimal(base_size = 10) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.text = element_text(size = 8),
+    axis.title = element_text(size = 12, face = "bold"),
+    plot.title = element_text(hjust = 0.5, size = 14),
+    plot.subtitle = element_text(hjust = 0.5, size = 12, face = "italic"),
+    legend.position = "right",
+    legend.title = element_text(face = "bold"),
+    panel.grid.major = element_line(color = "gray85"),
+    panel.grid.minor = element_line(color = "gray95"),
+    strip.background = element_rect(fill = "gray95"),
+    plot.caption = element_text(hjust = 0, face = "italic"),
+    strip.text = element_text(face = "bold")
+  )
+
+
+
+```
+
+#### Plot3
+
+```{r}
+Pov <- rbind(Pov20, Pov21)
+plot3 <- flood |>
+    filter(is.na(IndianReservation)) |> filter(!is.na(County)) |>
+    select(state, County, BEGIN_YEAR, totalNumberIaApproved, totalAmountIhpApproved, totalAmountHaApproved, totalAmountOnaApproved, totalObligatedAmountHmgp)
+plot3 <- plot3 |>
+  left_join(Pov, by = c("BEGIN_YEAR" = "YEAR", "County" = "COUNTY", "state" = "STATE"))
+
+#make NA to be 1
+plot3$totalNumberIaApproved[is.na(plot3$totalNumberIaApproved)] <- 1
+plot3$totalAmountIhpApproved[is.na(plot3$totalAmountIhpApproved)] <- 1
+plot3$totalAmountHaApproved[is.na(plot3$totalAmountHaApproved)] <- 1
+plot3$totalAmountOnaApproved[is.na(plot3$totalAmountOnaApproved)] <- 1
+plot3$totalObligatedAmountHmgp[is.na(plot3$totalObligatedAmountHmgp)] <- 1
+
+plot3 <- plot3 |>
+    mutate(FA = totalAmountIhpApproved + totalAmountHaApproved + totalAmountOnaApproved + totalObligatedAmountHmgp,
+           log_FA = log(FA))
+plot3$TOTAL_PERCENT <- as.integer(plot3$TOTAL_PERCENT)
+
+plot3 |>
+  ggplot(mapping = aes(x = log_FA, y = TOTAL_PERCENT, color = state)) + 
+  geom_jitter(alpha = 0.6, width = 0.1, height = 0) + 
+  facet_wrap(~BEGIN_YEAR) +
+  scale_y_continuous(labels = scales::percent_format(scale = 1)) + # 将y轴的刻度转换为百分比格式
+  labs(
+      y = "Percentage of Population Below Poverty Line",
+      x = "Ln(Total Financial Assistance)",
+      color = "State", 
+      title = "Relationship between Financial Assistance and Poverty Percentage",
+      subtitle = "Years 2020 and 2021",
+      caption = "Source: CENCUS & FEMA"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.text = element_text(size = 8),
+    axis.title = element_text(size = 12, face = "bold"),
+    plot.title = element_text(hjust = 0.5, size = 14),
+    plot.subtitle = element_text(hjust = 0.5, size = 12, face = "italic"),
+    legend.position = "right",
+    legend.title = element_text(face = "bold"),
+    panel.grid.major = element_line(color = "gray85"),
+    panel.grid.minor = element_line(color = "gray95"),
+    strip.background = element_rect(fill = "gray95"),
+    plot.caption = element_text(hjust = 0, face = "italic"),
+    strip.text = element_text(face = "bold")
+  )
+
 ```

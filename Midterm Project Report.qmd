@@ -5,7 +5,35 @@ format: pdf
 editor: visual
 ---
 
+## Data acquisition and assessment
+
+#### Data sources
+
+The dataset for this report has been collated from authoritative sources, specifically the National Oceanic and Atmospheric Administration (NOAA), the Federal Emergency Management Agency (FEMA), and the United States Census Bureau. This report concentrates on the incidence and impact of floods and storms during the years 2020 to 2021. It aims to shed light on the repercussions of these disasters on affected populations.
+
+#### Assumptions and motivations
+
+In this analysis, I operate under the assumption that there is a discernible relationship between the frequency and severity of storm and flood events and their socio-economic impact on communities, as recorded by census data. By examining monthly occurrences of storms and floods in 2020 and 2021, I aim to identify any patterns in their occurrence and the extent of their destructiveness.
+
+Additionally, I am motivated by the desire to understand how federal disaster relief funds, distributed by FEMA, assist affected communities, particularly in mitigating poverty levels. This report will investigate the intersection of natural disasters with socio-economic welfare by correlating storm and flood data with the allocation of government aid and its effectiveness in aiding counties and states.
+
+## Data cleaning and organization
+
 ```{r}
+#| label: Load libraries
+#| warning: false
+#| message: false
 #| echo: false
-2 * 2
+
+library(knitr)
+library(tidyverse)
+library(scales)
 ```
+
+## Question
+
+-   Which states in the U.S. received the most rainfall in 2020-2021? How was the distribution of rainfall in each month?（begin month/year, State, top10?, 2020 on left 2021 on right)
+
+-   Dangerous by fatality? facet by flood/not flood, y can be duration of the storm/flood.
+
+-   
